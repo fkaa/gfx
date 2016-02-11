@@ -286,7 +286,7 @@ impl d::Factory<R> for Factory {
         let gl = &self.share.context;
         let mut name = 0 as gl::types::GLuint;
         let buf_name = *self.frame_handles.ref_buffer(hbuf);
-        let format = gl::R8; //TODO: get from the buffer handle
+        let format = gl::R32I; //TODO: get from the buffer handle
         unsafe {
             gl.GenTextures(1, &mut name);
             gl.BindTexture(gl::TEXTURE_BUFFER, name);

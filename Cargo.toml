@@ -70,6 +70,10 @@ path = "examples/ubo_tilemap/main.rs"
 name = "mipmap"
 path = "examples/mipmap/main.rs"
 
+[[example]]
+name = "tiled_forward"
+path = "examples/tiled_forward/main.rs"
+
 [dev_dependencies]
 env_logger = "*"
 log = "*"
