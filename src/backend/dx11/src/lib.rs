@@ -90,7 +90,7 @@ impl Instance {
     pub fn create_surface(&self, window: &winit::Window) -> Surface {
         use winit::os::windows::WindowExt;
         self.create_surface_from_hwnd(window.get_hwnd() as *mut _)
-}
+    }
 }
 
 impl hal::Instance for Instance {
@@ -781,9 +781,7 @@ impl hal::Device<Backend> for Device {
 
             let format_desc = config
                 .color_format
-                .base_format()
-                .0
-                .desc();
+                .surface_desc();
 
             let bytes_per_block = (format_desc.bits / 8) as _;
             let block_dim = format_desc.dim;
