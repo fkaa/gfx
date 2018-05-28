@@ -119,11 +119,11 @@ impl hal::Instance for Instance {
                                 1,
                                 1
                             ], // TODO
-                            min_buffer_copy_offset_alignment: 0,    // TODO
-                            min_buffer_copy_pitch_alignment: 0,     // TODO
-                            min_texel_buffer_offset_alignment: 0,   // TODO
-                            min_uniform_buffer_offset_alignment: 0, // TODO
-                            min_storage_buffer_offset_alignment: 0, // TODO
+                            min_buffer_copy_offset_alignment: 1,    // TODO
+                            min_buffer_copy_pitch_alignment: 1,     // TODO
+                            min_texel_buffer_offset_alignment: 1,   // TODO
+                            min_uniform_buffer_offset_alignment: 1, // TODO
+                            min_storage_buffer_offset_alignment: 1, // TODO
                             framebuffer_color_samples_count: 0,     // TODO
                             framebuffer_depth_samples_count: 0,     // TODO
                             framebuffer_stencil_samples_count: 0,   // TODO
@@ -652,7 +652,10 @@ impl hal::Device<Backend> for Device {
         I: IntoIterator,
         I::Item: Borrow<ImageView>
     {
-        unimplemented!()
+        Ok(Framebuffer {
+            attachments: attachments.into_iter().map(|att| att.borrow().clone()).collect(),
+            layers: extent.depth as _,
+        })
     }
 
     fn create_shader_module(&self, raw_data: &[u8]) -> Result<ShaderModule, device::ShaderError> {
@@ -788,7 +791,36 @@ impl hal::Device<Backend> for Device {
         _swizzle: format::Swizzle,
         range: image::SubresourceRange,
     ) -> Result<ImageView, image::ViewError> {
-        unimplemented!()
+        // TODO: move out into separate functions
+        // TODO: mip level
+        // TODO: handle case where range layers >= 1
+        assert_eq!(range.layers, 0..1);
+        // TODO: SRV, UAV, DSV?
+
+        // TODO: check for rtv/srv/etc format support
+        let format = conv::map_format(format).unwrap();
+
+        let mut desc: d3d11::D3D11_RENDER_TARGET_VIEW_DESC = unsafe { mem::zeroed() };
+        desc.Format = format;
+        desc.ViewDimension = d3d11::D3D11_RTV_DIMENSION_TEXTURE2D;
+
+        let mut rtv = ptr::null_mut();
+        let hr = unsafe {
+            self.device.CreateRenderTargetView(
+                image.resource,
+                &desc,
+                &mut rtv as *mut *mut _ as *mut *mut _
+            )
+        };
+
+        if !winerror::SUCCEEDED(hr) {
+            // TODO: better errors
+            Err(image::ViewError::Unsupported)
+        } else {
+            Ok(ImageView {
+                rtv: unsafe { ComPtr::from_raw(rtv) }
+            })
+        }
     }
 
     fn create_sampler(&self, info: image::SamplerInfo) -> Sampler {
@@ -804,7 +836,9 @@ impl hal::Device<Backend> for Device {
         I: IntoIterator,
         I::Item: Borrow<pso::DescriptorRangeDesc>
     {
-        unimplemented!()
+        // TODO: descriptor pool
+
+        DescriptorPool
     }
 
     fn create_descriptor_set_layout<I>(
@@ -817,7 +851,9 @@ impl hal::Device<Backend> for Device {
     {
         // TODO: descriptorsetlayout
 
-        DescriptorSetLayout
+        DescriptorSetLayout {
+            bindings: bindings.into_iter().map(|b| b.borrow().clone()).collect()
+        }
     }
 
     fn write_descriptor_sets<'a, I, J>(&self, write_iter: I)
@@ -1299,7 +1335,17 @@ impl hal::command::RawCommandBuffer<Backend> for CommandBuffer {
         T: IntoIterator,
         T::Item: Borrow<command::ClearValueRaw>,
     {
-        unimplemented!()
+        // TODO: very temp
+        let color_views = framebuffer.attachments.iter().map(|a| a.rtv.as_raw()).collect::<Vec<_>>();
+        unsafe {
+            self.context.OMSetRenderTargets(
+                color_views.len() as _,
+                color_views.as_ptr(),
+                ptr::null_mut(),
+            );
+        }
+        // TODO: begin render pass
+        //unimplemented!()
     }
 
     fn next_subpass(&mut self, _contents: command::SubpassContents) {
@@ -1307,7 +1353,8 @@ impl hal::command::RawCommandBuffer<Backend> for CommandBuffer {
     }
 
     fn end_render_pass(&mut self) {
-        unimplemented!()
+        // TODO: end render pass
+        //unimplemented!()
     }
 
     fn pipeline_barrier<'a, T>(&mut self, _stages: Range<pso::PipelineStage>, _dependencies: memory::Dependencies, barriers: T)
@@ -1366,7 +1413,22 @@ impl hal::command::RawCommandBuffer<Backend> for CommandBuffer {
     }
 
     fn bind_vertex_buffers(&mut self, first_binding: u32, vbs: pso::VertexBufferSet<Backend>) {
-        unimplemented!()
+        let (buffers, offsets): (Vec<*mut d3d11::ID3D11Buffer>, Vec<u32>) = vbs.0.iter()
+            .map(|(buf, offset)| (buf.buffer.as_raw(), *offset as u32))
+            .unzip();
+
+        // TODO: strides
+        let strides = [16u32; 16];
+
+        unsafe {
+            self.context.IASetVertexBuffers(
+                first_binding,
+                buffers.len() as _,
+                buffers.as_ptr(),
+                strides.as_ptr(),
+                offsets.as_ptr(),
+            );
+        }
     }
 
     fn set_viewports<T>(&mut self, first_viewport: u32, viewports: T)
@@ -1408,7 +1470,24 @@ impl hal::command::RawCommandBuffer<Backend> for CommandBuffer {
     }
 
     fn bind_graphics_pipeline(&mut self, pipeline: &GraphicsPipeline) {
-        unimplemented!()
+        unsafe {
+            self.context.IASetPrimitiveTopology(pipeline.topology);
+            self.context.IASetInputLayout(pipeline.input_layout.as_raw());
+
+            self.context.VSSetShader(pipeline.vs.as_raw(), ptr::null_mut(), 0);
+            if let Some(ref ps) = pipeline.ps {
+                self.context.PSSetShader(ps.as_raw(), ptr::null_mut(), 0);
+            }
+
+            self.context.RSSetState(pipeline.rasterizer_state.as_raw());
+
+            // TODO: blend constants
+            self.context.OMSetBlendState(pipeline.blend_state.as_raw(), &[1f32; 4], !0);
+            if let Some(ref state) = pipeline.depth_stencil_state {
+                // TODO stencil
+                self.context.OMSetDepthStencilState(state.as_raw(), 0);
+            }
+        }
     }
 
     fn bind_graphics_descriptor_sets<'a, T>(&mut self, layout: &PipelineLayout, first_set: usize, sets: T)
@@ -1484,13 +1563,29 @@ impl hal::command::RawCommandBuffer<Backend> for CommandBuffer {
     }
 
     fn draw(&mut self, vertices: Range<VertexCount>, instances: Range<InstanceCount>) {
-        unimplemented!()
+        unsafe {
+            self.context.DrawInstanced(
+                vertices.end - vertices.start,
+                instances.end - instances.start,
+                vertices.start,
+                instances.start,
+            );
+        }
     }
 
     fn draw_indexed(&mut self, indices: Range<IndexCount>, base_vertex: VertexOffset, instances: Range<InstanceCount>) {
-        unimplemented!()
+        unsafe {
+            self.context.DrawIndexedInstanced(
+                indices.end - indices.start,
+                instances.end - instances.start,
+                indices.start,
+                base_vertex,
+                instances.start,
+            );
+        }
     }
 
+    // TODO: >=11.3?
     fn draw_indirect(&mut self, buffer: &Buffer, offset: buffer::Offset, draw_count: u32, stride: u32) {
         unimplemented!()
     }
@@ -1601,7 +1696,10 @@ unsafe impl Sync for ShaderModule { }
 #[derive(Debug)]
 pub struct RenderPass;
 #[derive(Debug)]
-pub struct Framebuffer;
+pub struct Framebuffer {
+    attachments: Vec<ImageView>,
+    layers: image::Layer,
+}
 
 #[derive(Debug)]
 pub struct UnboundBuffer {
@@ -1645,8 +1743,16 @@ pub struct Image {
 unsafe impl Send for Image { }
 unsafe impl Sync for Image { }
 
-#[derive(Debug)]
-pub struct ImageView;
+#[derive(Derivative, Clone)]
+#[derivative(Debug)]
+pub struct ImageView {
+    #[derivative(Debug="ignore")]
+    rtv: ComPtr<d3d11::ID3D11RenderTargetView>
+}
+
+unsafe impl Send for ImageView { }
+unsafe impl Sync for ImageView { }
+
 #[derive(Debug)]
 pub struct Sampler;
 
@@ -1683,15 +1789,20 @@ unsafe impl Sync for GraphicsPipeline { }
 
 #[derive(Debug)]
 pub struct PipelineLayout;
+
 #[derive(Debug)]
-pub struct DescriptorSetLayout;
+pub struct DescriptorSetLayout {
+    bindings: Vec<pso::DescriptorSetLayoutBinding>,
+}
 
 // TODO: descriptor pool
 #[derive(Debug)]
 pub struct DescriptorPool;
 impl hal::DescriptorPool<Backend> for DescriptorPool {
     fn allocate_set(&mut self, layout: &DescriptorSetLayout) -> Result<DescriptorSet, pso::AllocationError> {
-        unimplemented!()
+        // TODO: descriptor set
+
+        Ok(DescriptorSet)
     }
 
     fn reset(&mut self) {
